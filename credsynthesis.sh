@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-#  CRED-SYNTHESIS v3.0 (Final Release)
+#  CRED-SYNTHESIS v3.5 (Enhanced Edition)
 #  Targeted Credential Synthesis Engine
 # ============================================================
 
@@ -70,6 +70,9 @@ collect_data() {
     read -p "Surname              : " LAST
     read -p "Nickname             : " NICK
     read -p "Birthdate (DDMMYYYY) : " DOB
+    
+    # NEW: Domain support based on your input
+    read -p "Target Domain (optional, adds @domain.com) : " TARGET_DOMAIN
 
     echo -e "\n${BOLD}--- Relations ---${NC}"
     read -p "Partner's Name       : " P_NAME
@@ -95,14 +98,14 @@ collect_data() {
     POL_MIN=${POL_MIN:-6}
     
     read -p "Max Length (empty = no limit)   : " POL_MAX
-    # Если пусто, ставим 9999 (практически бесконечность)
     if [ -z "$POL_MAX" ]; then POL_MAX=9999; fi
 
     read -p "Require Digits [0-9]? (Y/n)     : " POL_DIGIT
     read -p "Require Uppercase [A-Z]? (Y/n)  : " POL_UPPER
     read -p "Require Lowercase [a-z]? (Y/n)  : " POL_LOWER
     
-    echo -e "${BOLD}Special Characters Filter${NC} (!@#$%^&*)"
+    echo -e "${BOLD}Special Characters Filter${NC}"
+    echo -e "Includes extended set: ${YELLOW}!@#$%^&*()_+-=[]{};':\",.<>/?${NC}"
     read -p "Minimum count required (0, 1, 2...)? [Default: 1]: " POL_SPEC_COUNT
     POL_SPEC_COUNT=${POL_SPEC_COUNT:-1}
 }
@@ -114,11 +117,20 @@ synthesize() {
     # === A. USERNAMES ===
     status "Synthesizing Usernames..."
     OUT_USER="usernames_${FIRST}.txt"
+    
+    # Base command construction
+    UA_CMD="$UA_BIN"
+    
+    # Logic: If Domain is set, use -@ flag (from your notes)
+    if [ -n "$TARGET_DOMAIN" ]; then
+        UA_CMD="$UA_CMD -@ $TARGET_DOMAIN"
+    fi
+
     if [ -n "$LAST" ]; then
-        "$UA_BIN" "$FIRST" "$LAST" > "$OUT_USER" 2>/dev/null
-        if [ -n "$NICK" ]; then "$UA_BIN" "$NICK" >> "$OUT_USER" 2>/dev/null; fi
+        $UA_CMD "$FIRST" "$LAST" > "$OUT_USER" 2>/dev/null
+        if [ -n "$NICK" ]; then $UA_CMD "$NICK" >> "$OUT_USER" 2>/dev/null; fi
     else
-        "$UA_BIN" "$FIRST" > "$OUT_USER" 2>/dev/null
+        $UA_CMD "$FIRST" > "$OUT_USER" 2>/dev/null
     fi
     sort -u "$OUT_USER" -o "$OUT_USER"
     success "Username list compiled: $OUT_USER"
@@ -158,6 +170,7 @@ filter_results() {
     status "Raw candidates: $RAW_COUNT"
 
     # 1. Length Filter (Min & Max)
+    # Regex logic: ^.{min,}$
     awk "length(\$0) >= $POL_MIN && length(\$0) <= $POL_MAX" "$RAW_FILE" > "$TMP_FILTER"
 
     # 2. Digit Filter [0-9]
@@ -175,17 +188,22 @@ filter_results() {
         grep -E '[a-z]' "$TMP_FILTER" > "${TMP_FILTER}.2" && mv "${TMP_FILTER}.2" "$TMP_FILTER"
     fi
 
-    # 5. Special Character Count
+    # 5. Extended Special Character Count
+    # Using the full list you provided: !@#$%^&*()_+-=[]{};':"\,.<>/?
     if [ "$POL_SPEC_COUNT" -gt 0 ]; then
         awk -v min="$POL_SPEC_COUNT" '{
             count = 0;
             n = split($0, chars, "")
             for (i=1; i<=n; i++) {
-                if (chars[i] ~ /[!@#$%^&*]/) count++
+                # Check against the extended set of special chars
+                if (chars[i] ~ /[!@#$%^&*()_+\-=\[\]{};'\''\:"\\,.<>\/?]/) count++
             }
             if (count >= min) print $0
         }' "$TMP_FILTER" > "${TMP_FILTER}.2" && mv "${TMP_FILTER}.2" "$TMP_FILTER"
     fi
+
+    # Optional: Filter repeated chars (Commented out by default)
+    # grep -v -E "(.)\1" "$TMP_FILTER" > "${TMP_FILTER}.2" && mv "${TMP_FILTER}.2" "$TMP_FILTER"
 
     sort -u "$TMP_FILTER" > "$OUT_PASS"
     rm "$RAW_FILE" "$TMP_FILTER" 2>/dev/null
@@ -197,6 +215,9 @@ filter_results() {
     echo -e "${CYAN}==========================================${NC}"
     echo -e "Target Identity : ${BOLD}$FIRST $LAST${NC}"
     echo -e "1. Usernames    : $OUT_USER ($(wc -l < $OUT_USER))"
+    if [ -n "$TARGET_DOMAIN" ]; then
+        echo -e "   Format       : Email (@$TARGET_DOMAIN)"
+    fi
     echo -e "2. Passwords    : $OUT_PASS"
     echo -e "   Count        : ${BOLD}$FINAL_COUNT${NC} (Filtered from $RAW_COUNT)"
     echo -e "   Policy       : Len:$POL_MIN-$POL_MAX, SpecChars>=$POL_SPEC_COUNT"
